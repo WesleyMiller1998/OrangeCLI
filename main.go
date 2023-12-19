@@ -266,8 +266,9 @@ func (m *Miner) checkMiner(ctx context.Context) {
 	minerSeconds := minerBalance / (cost / 60)
 	minerMinutes := (minerSeconds % 3600) / 60
 	minerHours := (minerSeconds / 3600) / 60
+	minerDays := ((minerSeconds / 3600) / 60) / 24
 
-	slog.Info("Miner run time", "hours", minerHours, "minutes", minerMinutes)
+	slog.Info("Miner run time", "days", minerDays, "hours", minerHours, "minutes", minerMinutes)
 }
 
 func (m *Miner) checkDepositOptedIn(ctx context.Context) {
