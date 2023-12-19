@@ -379,7 +379,7 @@ func (m *Miner) getApplicationData(ctx context.Context) (AppData, error) {
 				return AppData{}, err
 			}
 
-			appData.LastMiner, err = types.EncodeAddress(b)
+			appData.CurrentMiner, err = types.EncodeAddress(b)
 			if err != nil {
 				return AppData{}, err
 			}
@@ -387,6 +387,8 @@ func (m *Miner) getApplicationData(ctx context.Context) (AppData, error) {
 			appData.CurrentMinerEffort = gs.Value.Uint
 		}
 	}
+
+	slog.Info("appData", "appData", appData)
 
 	return appData, nil
 }
