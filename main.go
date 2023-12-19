@@ -391,9 +391,14 @@ func (m *Miner) getApplicationData(ctx context.Context) (AppData, error) {
 }
 
 func (m *Miner) mine(ctx context.Context) {
-	ticker := time.NewTicker(time.Minute)
+	intervalSec := 2
+	ticker := time.NewTicker(time.Duration(intervalSec) * time.Second)
 
 	loops := 0
+
+	intervals := 60 / intervalSec
+	avgTxnPerInterval := float64(m.tpm) / (float64(60) / float64(intervalSec))
+	counter := uint64(0)
 
 	startTime := time.Now()
 
@@ -401,6 +406,10 @@ func (m *Miner) mine(ctx context.Context) {
 	for {
 		if loops%5 == 0 {
 			slog.Info("Mining stats", "totalTxns", m.total.Load(), "elapsedTime", time.Now().Sub(startTime).String())
+		}
+
+		if loops%intervals == 0 {
+			counter = 0
 		}
 
 		appData, err := m.getApplicationData(ctx)
@@ -418,8 +427,14 @@ func (m *Miner) mine(ctx context.Context) {
 		sp.FlatFee = true
 		sp.Fee = types.MicroAlgos(m.fee)
 
-		for j := uint64(0); j < m.tpm; j += 16 {
-			end := min(j+16, m.tpm)
+		txnsToSend := uint64(avgTxnPerInterval)
+
+		if float64(counter) < float64(loops%intervals)*avgTxnPerInterval {
+			txnsToSend += 1
+		}
+
+		for j := counter; j < counter+txnsToSend; j += 16 {
+			end := min(j+16, counter+txnsToSend)
 
 			go func(appData AppData, sp types.SuggestedParams, start uint64, end uint64) {
 				err := m.submitGroup(ctx, appData, sp, start, end)
@@ -430,6 +445,7 @@ func (m *Miner) mine(ctx context.Context) {
 		}
 
 		loops++
+		counter += txnsToSend
 
 		select {
 		case <-ctx.Done():
