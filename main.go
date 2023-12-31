@@ -24,6 +24,7 @@ import (
 	"github.com/algorand/go-algorand-sdk/v2/mnemonic"
 	"github.com/algorand/go-algorand-sdk/v2/transaction"
 	"github.com/algorand/go-algorand-sdk/v2/types"
+	"github.com/joho/godotenv"
 )
 
 var minerMnemonic string
@@ -42,6 +43,8 @@ func init() {
 	flag.Uint64Var(&fee, "fee", 2000, "Fee per transaction (micro algos).")
 	flag.StringVar(&network, "network", "", "Algorand network.")
 	flag.Parse()
+
+	godotenv.Load()
 
 	if network != "mainnet" && network != "testnet" {
 		slog.Error("network flag must be set to 'mainnet' or 'testnet'", "network", network)
@@ -171,7 +174,11 @@ func makeClient() *algod.Client {
 			panic("stopping execution because ALGOD_MAINNET_PORT was not found")
 		}
 
-		client, err := algod.MakeClient(fmt.Sprintf("%s:%s", server, port), token)
+		customTransport := http.DefaultTransport.(*http.Transport).Clone()
+		customTransport.MaxIdleConns = 100
+		customTransport.MaxConnsPerHost = 100
+		customTransport.MaxIdleConnsPerHost = 100
+		client, err := algod.MakeClientWithTransport(fmt.Sprintf("%s:%s", server, port), token, nil, customTransport)
 		if err != nil {
 			slog.Error("failed to make algod mainnet client", "err", err)
 			panic("stopping execution because algod client failed creation")
@@ -273,10 +280,20 @@ func (m *Miner) checkMiner(ctx context.Context) {
 
 	minerSeconds := minerBalance / (cost / 60)
 	minerMinutes := (minerSeconds % 3600) / 60
-	minerHours := (minerSeconds / 3600) / 60
-	minerDays := ((minerSeconds / 3600) / 60) / 24
+	minerHours := (minerSeconds % 86400) / 3600
+	minerDays := minerSeconds / 86400
 
 	slog.Info("Miner run time", "days", minerDays, "hours", minerHours, "minutes", minerMinutes)
+}
+
+func (m *Miner) getMinerBalance(ctx context.Context) (uint64, error) {
+	minerInfo, err := m.getBareAccount(ctx, m.minerAccount.Address)
+	if err != nil {
+		return 0, err
+	}
+
+	minerBalance := minerInfo.Amount - minerInfo.MinBalance
+	return minerBalance, nil
 }
 
 func (m *Miner) checkDepositOptedIn(ctx context.Context) {
@@ -439,6 +456,17 @@ func (m *Miner) mine(ctx context.Context) {
 	for {
 		if loops%5 == 0 {
 			slog.Info("Mining stats", "totalTxns", m.total.Load(), "elapsedTime", time.Now().Sub(startTime).String())
+			bal, err := m.getMinerBalance(ctx)
+			if err != nil {
+				slog.Error("failed to get miner balance, sleeping for 5 seconds and continuing...", "err", err)
+				time.Sleep(5 * time.Second)
+				continue
+			}
+
+			if bal < 0 {
+				slog.Error("miner has low balance. exiting...")
+				return
+			}
 		}
 
 		if loops%intervals == 0 {
@@ -493,6 +521,8 @@ func (m *Miner) mine(ctx context.Context) {
 func (m *Miner) submitGroup(ctx context.Context, appData AppData, sp types.SuggestedParams, start uint64, end uint64) error {
 	composer := transaction.AtomicTransactionComposer{}
 
+	newStart := start
+
 	if m.fee == 1000 && start < end {
 		newSp := sp
 		newSp.Fee = 2000
@@ -508,10 +538,10 @@ func (m *Miner) submitGroup(ctx context.Context, appData AppData, sp types.Sugge
 			Note:            []byte(fmt.Sprint(start)),
 		})
 
-		start += 1
+		newStart += 1
 	}
 
-	for i := start; i < end; i++ {
+	for i := newStart; i < end; i++ {
 		composer.AddMethodCall(transaction.AddMethodCallParams{
 			AppID:           m.appID,
 			Method:          m.method,

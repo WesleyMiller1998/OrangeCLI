@@ -5,6 +5,7 @@ go 1.21.3
 require (
 	github.com/algorand/go-algorand-sdk v1.24.0
 	github.com/algorand/go-algorand-sdk/v2 v2.4.0
+	github.com/joho/godotenv v1.5.1
 )
 
 require (
