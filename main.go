@@ -52,7 +52,7 @@ func init() {
 		panic("stopping execution because tpm value is invalid")
 	}
 
-	if fee < 2000 || fee > 20000 {
+	if fee < 1000 || fee > 20000 {
 		slog.Error("invalid fee value. fee must be at least 2000 micro algos and no greater than 20000 micro algos", "fee", fee)
 		panic("stopping execution because fee value is invalid")
 	}
@@ -262,6 +262,9 @@ func (m *Miner) checkMiner(ctx context.Context) {
 	cost := uint64(tpm) * fee
 	slog.Info(fmt.Sprintf("Miner will send %d transactions per minutes with %f fee (%f ALGO cost per minute)", tpm, float64(fee)/math.Pow10(6), float64(cost)/math.Pow10(6)))
 	slog.Info(fmt.Sprintf("Miner will spend %f ALGO", float64(minerBalance)/math.Pow10(6)))
+	if fee == 1000 {
+		slog.Info("Since you set fee to minimum (1000), you will be spending slightly more and have a slightly shorter run time than calculated")
+	}
 
 	minerSeconds := minerBalance / (cost / 60)
 	minerMinutes := (minerSeconds % 3600) / 60
@@ -326,6 +329,7 @@ type AppData struct {
 	LastMinerEffort    uint64
 	CurrentMiner       string
 	CurrentMinerEffort uint64
+	StartTimestamp     time.Time
 }
 
 func (m *Miner) getApplicationData(ctx context.Context) (AppData, error) {
@@ -385,12 +389,31 @@ func (m *Miner) getApplicationData(ctx context.Context) (AppData, error) {
 			}
 		case "current_miner_effort":
 			appData.CurrentMinerEffort = gs.Value.Uint
+		case "start_timestamp":
+			appData.StartTimestamp = time.Unix(int64(gs.Value.Uint), 0)
 		}
 	}
 
-	slog.Info("appData", "appData", appData)
-
 	return appData, nil
+}
+
+func (m *Miner) waitForStart(ctx context.Context) {
+	now := time.Now()
+	appData, err := m.getApplicationData(ctx)
+	if err != nil {
+		slog.Error("failed to get application data", "err", err)
+		panic("stopping execution because retreiving application data failed")
+	}
+	for now.Before(appData.StartTimestamp) {
+		slog.Info("waiting for mining to begin", "timeRemaining", appData.StartTimestamp.Sub(now).String())
+		time.Sleep(5 * time.Second)
+		appData, err = m.getApplicationData(ctx)
+		if err != nil {
+			slog.Error("failed to get application data", "err", err)
+			panic("stopping execution because retreiving application data failed")
+		}
+		now = time.Now()
+	}
 }
 
 func (m *Miner) mine(ctx context.Context) {
@@ -405,6 +428,8 @@ func (m *Miner) mine(ctx context.Context) {
 
 	startTime := time.Now()
 
+	m.waitForStart(ctx)
+
 	slog.Info("Starting miner...")
 	for {
 		if loops%5 == 0 {
@@ -417,14 +442,16 @@ func (m *Miner) mine(ctx context.Context) {
 
 		appData, err := m.getApplicationData(ctx)
 		if err != nil {
-			slog.Error("failed to get application data", "err", err)
-			panic("stopping execution because deposit address is not opted into asset")
+			slog.Error("failed to get application data, sleeping for 5 seconds and continuing...", "err", err)
+			time.Sleep(5 * time.Second)
+			continue
 		}
 
 		sp, err := m.client.SuggestedParams().Do(ctx)
 		if err != nil {
-			slog.Error("failed to get suggested params", "err", err)
-			panic("stopping execution because of failure to get suggested params")
+			slog.Error("failed to get suggested params, sleeping for 5 seconds and continuing...", "err", err)
+			time.Sleep(5 * time.Second)
+			continue
 		}
 
 		sp.FlatFee = true
@@ -460,6 +487,24 @@ func (m *Miner) mine(ctx context.Context) {
 
 func (m *Miner) submitGroup(ctx context.Context, appData AppData, sp types.SuggestedParams, start uint64, end uint64) error {
 	composer := transaction.AtomicTransactionComposer{}
+
+	if m.fee == 1000 && start < end {
+		newSp := sp
+		newSp.Fee = 2000
+		composer.AddMethodCall(transaction.AddMethodCallParams{
+			AppID:           m.appID,
+			Method:          m.method,
+			MethodArgs:      []any{m.depositAddress},
+			Sender:          m.minerAccount.Address,
+			SuggestedParams: sp,
+			Signer:          transaction.BasicAccountTransactionSigner{Account: m.minerAccount},
+			ForeignAccounts: []string{appData.LastMiner, m.depositAddress.String()},
+			ForeignAssets:   []uint64{appData.Asset},
+			Note:            []byte(fmt.Sprint(start)),
+		})
+
+		start += 1
+	}
 
 	for i := start; i < end; i++ {
 		composer.AddMethodCall(transaction.AddMethodCallParams{
