@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -196,7 +197,11 @@ func makeClient() *algod.Client {
 		panic("stopping execution because ALGOD_TESTNET_PORT was not found")
 	}
 
-	client, err := algod.MakeClient(fmt.Sprintf("%s:%s", server, port), token)
+	customTransport := http.DefaultTransport.(*http.Transport).Clone()
+	customTransport.MaxIdleConns = 100
+	customTransport.MaxConnsPerHost = 100
+	customTransport.MaxIdleConnsPerHost = 100
+	client, err := algod.MakeClientWithTransport(fmt.Sprintf("%s:%s", server, port), token, nil, customTransport)
 	if err != nil {
 		slog.Error("failed to make algod testnet client", "err", err)
 		panic("stopping execution because algod client failed creation")
