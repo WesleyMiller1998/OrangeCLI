@@ -463,7 +463,7 @@ func (m *Miner) mine(ctx context.Context) {
 				continue
 			}
 
-			if bal < 0 {
+			if bal < 16*m.fee {
 				slog.Error("miner has low balance. exiting...")
 				return
 			}
